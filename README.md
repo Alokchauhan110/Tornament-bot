@@ -109,6 +109,20 @@ Your bot is now live on Telegram!
     -   **📋 View Tournaments:** Displays a list of all open tournaments and their status.
     -   **👥 View Registrations:** Asks for a Tournament ID and then shows the list of registered players.
 
+
 ---
 
-## 📂 Project Structure
+## 🤝 Contributing
+
+Contributions are welcome! If you have ideas for new features, improvements, or bug fixes, feel free to:
+1.  Fork the repository.
+2.  Create a new feature branch (`git checkout -b feature/AmazingFeature`).
+3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`).
+4.  Push to the branch (`git push origin feature/AmazingFeature`).
+5.  Open a Pull Request.
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License.
