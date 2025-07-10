@@ -1,4 +1,4 @@
-# main.py (The 100% complete and final version for Render/Uvicorn deployment)
+# main.py (Final corrected version with proper variable scope)
 
 import logging
 import os
@@ -35,24 +35,8 @@ REGISTER_GET_USERNAME, REGISTER_GET_USERID = range(5, 7)
 (SEND_ROOM_GET_TID, SEND_ROOM_GET_RID, SEND_ROOM_GET_RPASS, SEND_ROOM_CONFIRM) = range(7, 11)
 
 
-# ========== BOT SETUP FUNCTION ==========
-
-async def post_init(app: Application) -> None:
-    """
-    This function runs after the bot has been initialized.
-    It sets up the database and grants admin rights.
-    """
-    db.setup_database()
-    conn = db.get_db_connection()
-    conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (ADMIN_ID,))
-    conn.execute("UPDATE users SET is_admin = 1 WHERE telegram_id = ?", (ADMIN_ID,))
-    conn.commit()
-    conn.close()
-    logger.info(f"Admin rights granted to user ID: {ADMIN_ID}")
-    logger.info("Bot startup tasks complete.")
-
-
 # ========== USER COMMANDS & HANDLERS ==========
+# (All handler functions go here)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -347,80 +331,72 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 # ========== WEB SERVER & BOT SETUP ==========
 
+# Define the global application object first
+application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+
+# Define all handler objects
+register_conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("register", register_start)],
+    states={
+        REGISTER_GET_USERNAME: [
+            CallbackQueryHandler(register_tournament_choice, pattern='^register_'),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, register_get_username),
+        ],
+        REGISTER_GET_USERID: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_get_userid)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+
+admin_conv_handler = ConversationHandler(
+    entry_points=[
+        MessageHandler(filters.Regex('^➕ Add Tournament$'), add_tournament_start),
+        MessageHandler(filters.Regex('^📢 Broadcast$'), broadcast_start),
+        MessageHandler(filters.Regex('^👥 View Registrations$'), view_registrations_start)
+    ],
+    states={
+        ADD_TOURNAMENT_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_tournament_get_mode)],
+        ADD_TOURNAMENT_DATETIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_tournament_get_datetime)],
+        ADD_TOURNAMENT_FEE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_tournament_get_fee)],
+        BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_get_message)],
+        VIEW_REGISTRATIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, view_registrations_get_id)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+
+send_room_handler = ConversationHandler(
+    entry_points=[CommandHandler("sendroom", send_room_start)],
+    states={
+        SEND_ROOM_GET_TID: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_tid)],
+        SEND_ROOM_GET_RID: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_rid)],
+        SEND_ROOM_GET_RPASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_rpass)],
+        SEND_ROOM_CONFIRM: [CallbackQueryHandler(send_room_confirm)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+
+# Add all handlers to the application object
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("help", help_command))
+application.add_handler(CommandHandler("myinfo", my_info))
+application.add_handler(CommandHandler("admin", admin_panel))
+application.add_handler(MessageHandler(filters.Regex('^📋 View Tournaments$'), view_tournaments))
+application.add_handler(register_conv_handler)
+application.add_handler(admin_conv_handler)
+application.add_handler(send_room_handler)
+
+
 @asynccontextmanager
-async def lifespan(app: Flask):
+async def lifespan(_: Flask):
     """
     The lifespan context manager. It runs startup and shutdown tasks.
     """
-    # Initialize all handlers
-    register_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("register", register_start)],
-        states={
-            REGISTER_GET_USERNAME: [
-                CallbackQueryHandler(register_tournament_choice, pattern='^register_'),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, register_get_username),
-            ],
-            REGISTER_GET_USERID: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_get_userid)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    admin_conv_handler = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex('^➕ Add Tournament$'), add_tournament_start),
-            MessageHandler(filters.Regex('^📢 Broadcast$'), broadcast_start),
-            MessageHandler(filters.Regex('^👥 View Registrations$'), view_registrations_start)
-        ],
-        states={
-            ADD_TOURNAMENT_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_tournament_get_mode)],
-            ADD_TOURNAMENT_DATETIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_tournament_get_datetime)],
-            ADD_TOURNAMENT_FEE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_tournament_get_fee)],
-            BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_get_message)],
-            VIEW_REGISTRATIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, view_registrations_get_id)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    
-    send_room_handler = ConversationHandler(
-        entry_points=[CommandHandler("sendroom", send_room_start)],
-        states={
-            SEND_ROOM_GET_TID: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_tid)],
-            SEND_ROOM_GET_RID: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_rid)],
-            SEND_ROOM_GET_RPASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_rpass)],
-            SEND_ROOM_CONFIRM: [CallbackQueryHandler(send_room_confirm)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    # Build the application and add all handlers
-    application = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .post_init(post_init)
-        .build()
-    )
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("myinfo", my_info))
-    application.add_handler(CommandHandler("admin", admin_panel))
-    application.add_handler(MessageHandler(filters.Regex('^📋 View Tournaments$'), view_tournaments))
-    application.add_handler(register_conv_handler)
-    application.add_handler(admin_conv_handler)
-    application.add_handler(send_room_handler)
-
-    # Start the bot
     await application.initialize()
     await application.start()
-    
-    # This part is for the web server, it yields control
     yield
-    
-    # Shutdown the bot
     await application.stop()
     await application.shutdown()
 
-# Create the Flask app with the lifespan manager
+# Create the Flask app, connecting it to the PTB application via the lifespan
 app = Flask(__name__)
 app.wsgi_app = application.builder().lifespan(lifespan).build().asgi_app
 
