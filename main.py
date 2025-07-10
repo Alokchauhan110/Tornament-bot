@@ -1,4 +1,4 @@
-# main.py (The final, stable, and working version for Render)
+# main.py (The Final, Simplified, and Correct Version)
 
 import logging
 import os
@@ -19,7 +19,6 @@ from flask import Flask, request
 # --- Configuration ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID"))
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -386,20 +385,22 @@ application.add_handler(send_room_handler)
 
 app = Flask(__name__)
 
-@app.before_first_request
-async def startup():
-    """Runs startup tasks only on the very first request to the server."""
+async def main_setup():
+    """Initializes the bot and its handlers, and sets up the database."""
     global app_initialized
     if not app_initialized:
+        await application.initialize()
         db.setup_database()
         conn = db.get_db_connection()
         conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (ADMIN_ID,))
         conn.execute("UPDATE users SET is_admin = 1 WHERE telegram_id = ?", (ADMIN_ID,))
         conn.commit()
         conn.close()
-        await application.initialize()
         app_initialized = True
         logger.info("Application initialized and database setup complete.")
+
+# Run the setup once when the app starts
+asyncio.run(main_setup())
 
 @app.route("/")
 def index():
