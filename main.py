@@ -1,6 +1,9 @@
-# main.py
+# main.py (Complete version for Render Webhook Deployment)
+
 import logging
+import os
 import database as db
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
@@ -11,10 +14,15 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
+from flask import Flask, request
 
 # --- Configuration ---
-BOT_TOKEN = "YOUR_BOT_TOKEN"  # <-- IMPORTANT: PASTE YOUR BOT TOKEN HERE
-ADMIN_ID = 123456789          # <-- IMPORTANT: PASTE YOUR TELEGRAM ID HERE
+# Get secrets from Render's Environment Variables
+# Make sure you set these in the Render dashboard!
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_ID = int(os.environ.get("ADMIN_ID"))
+# Render provides this URL automatically
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -23,14 +31,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Conversation States ---
-# Admin states
 (ADD_TOURNAMENT_MODE, ADD_TOURNAMENT_DATETIME, ADD_TOURNAMENT_FEE,
  BROADCAST_MESSAGE, VIEW_REGISTRATIONS) = range(5)
-# User states
 REGISTER_GET_USERNAME, REGISTER_GET_USERID = range(5, 7)
 
 
-# ========== USER COMMANDS ==========
+# ========== USER COMMANDS & HANDLERS (No changes from original) ==========
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -66,9 +72,7 @@ async def my_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await update.message.reply_text("You haven't set your Free Fire info yet. Please /register for a tournament to set it.")
 
-
-# ========== REGISTRATION PROCESS (User Conversation) ==========
-
+# --- Registration Process ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     tournaments = db.get_open_tournaments()
     if not tournaments:
@@ -84,7 +88,7 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Please choose a tournament to register for:", reply_markup=reply_markup)
-    return REGISTER_GET_USERNAME # Initial state, but we wait for callback
+    return REGISTER_GET_USERNAME
 
 async def register_tournament_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -92,7 +96,6 @@ async def register_tournament_choice(update: Update, context: ContextTypes.DEFAU
     tournament_id = int(query.data.split('_')[1])
     context.user_data['tournament_id'] = tournament_id
 
-    # Check if tournament is full
     tournament = db.get_tournament_details(tournament_id)
     registrations = db.get_registrations_for_tournament(tournament_id)
     if len(registrations) >= tournament['max_players']:
@@ -113,15 +116,12 @@ async def register_get_userid(update: Update, context: ContextTypes.DEFAULT_TYPE
     ff_username = context.user_data['ff_username']
     tournament_id = context.user_data['tournament_id']
     
-    # Save user details
     db.add_or_update_user(user.id, ff_username, ff_userid)
-    
-    # Register for tournament
     result = db.register_user_for_tournament(tournament_id, user.id)
 
     if result == "SUCCESS":
         tournament = db.get_tournament_details(tournament_id)
-        fee_message = f"Please pay the registration fee of <b>₹{tournament['fee']}</b> to confirm your slot. Contact the admin for payment details." if tournament['fee'] > 0 else "This is a free tournament."
+        fee_message = f"Please pay the registration fee of <b>₹{tournament['fee']}</b> to confirm your slot." if tournament['fee'] > 0 else "This is a free tournament."
         await update.message.reply_html(
             f"✅ <b>Registration Successful!</b>\n\n"
             f"<b>Tournament:</b> {tournament['mode']} on {tournament['date_time']}\n"
@@ -135,22 +135,16 @@ async def register_get_userid(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     return ConversationHandler.END
 
-
-# ========== ADMIN COMMANDS ==========
-
+# --- Admin Commands ---
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not db.is_admin(update.effective_user.id):
         await update.message.reply_text("You are not authorized to use this command.")
         return
 
-    keyboard = [
-        ['➕ Add Tournament', '📢 Broadcast'],
-        ['📋 View Tournaments', '👥 View Registrations'],
-    ]
+    keyboard = [['➕ Add Tournament', '📢 Broadcast'], ['📋 View Tournaments', '👥 View Registrations']]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Welcome to the Admin Panel. Choose an option:", reply_markup=reply_markup)
 
-# --- Add Tournament (Admin Conversation) ---
 async def add_tournament_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not db.is_admin(update.effective_user.id): return ConversationHandler.END
     keyboard = [['Battle Royale (50)', 'Clash Squad (8)']]
@@ -181,7 +175,6 @@ async def add_tournament_get_datetime(update: Update, context: ContextTypes.DEFA
 async def add_tournament_get_fee(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         fee = int(update.message.text)
-        # Add to database
         db.add_tournament(
             mode=context.user_data['mode'],
             date_time=context.user_data['date_time'],
@@ -194,7 +187,6 @@ async def add_tournament_get_fee(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("Invalid fee. Please enter a number.")
         return ADD_TOURNAMENT_FEE
 
-# --- Broadcast (Admin Conversation) ---
 async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not db.is_admin(update.effective_user.id): return ConversationHandler.END
     await update.message.reply_text("Please send the message you want to broadcast to all users.")
@@ -214,14 +206,12 @@ async def broadcast_get_message(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text(f"Broadcast sent to {sent_count}/{len(user_ids)} users.")
     return ConversationHandler.END
 
-# --- View Tournaments & Registrations ---
 async def view_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not db.is_admin(update.effective_user.id): return
     tournaments = db.get_open_tournaments()
     if not tournaments:
         await update.message.reply_text("No open tournaments found.")
         return
-
     response = "<b>Open Tournaments:</b>\n\n"
     for t in tournaments:
         mode = "Battle Royale" if t['mode'] == 'BR' else "Clash Squad"
@@ -230,7 +220,6 @@ async def view_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         response += f"  - Date: {t['date_time']}\n"
         response += f"  - Fee: {t['fee']}\n"
         response += f"  - Registered: {regs}/{t['max_players']}\n\n"
-    
     await update.message.reply_html(response)
 
 async def view_registrations_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -243,53 +232,60 @@ async def view_registrations_get_id(update: Update, context: ContextTypes.DEFAUL
         tournament_id = int(update.message.text)
         registrations = db.get_registrations_for_tournament(tournament_id)
         tournament = db.get_tournament_details(tournament_id)
-        
         if not tournament:
             await update.message.reply_text("Tournament with that ID not found.")
             return ConversationHandler.END
-
         if not registrations:
             await update.message.reply_text(f"No one has registered for Tournament ID {tournament_id} yet.")
             return ConversationHandler.END
-            
         response = f"<b>Registrations for Tournament ID {tournament_id}:</b>\n"
         response += f"({tournament['mode']} on {tournament['date_time']})\n\n"
         for i, reg in enumerate(registrations, 1):
             response += f"{i}. {reg['ff_username']} (ID: {reg['ff_userid']})\n"
-            
         await update.message.reply_html(response)
-
     except ValueError:
         await update.message.reply_text("Invalid ID. Please enter a number.")
-    
     return ConversationHandler.END
 
-
-# ========== UTILITY & CANCEL ==========
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancels and ends the conversation."""
     await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
 
+# ========== NEW SECTION: FLASK WEB SERVER & WEBHOOK SETUP ==========
 
-def main() -> None:
-    """Run the bot."""
-    # First, set up the database
+# Initialize the Bot Application globally
+application = Application.builder().token(BOT_TOKEN).build()
+
+# Initialize the Flask app
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    """ A simple page to confirm the web server is running. """
+    return "Hello, I am your Free Fire Bot and I am running!"
+
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+async def webhook():
+    """This endpoint receives the updates from Telegram."""
+    update_json = request.get_json(force=True)
+    update = Update.de_json(update_json, application.bot)
+    await application.process_update(update)
+    return "ok"
+
+async def setup_bot():
+    """Sets up the bot and the webhook when the server starts."""
+    # Ensure the database is set up
     db.setup_database()
 
-    # Make the default user an admin
+    # Grant admin rights on startup
     conn = db.get_db_connection()
     conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (ADMIN_ID,))
     conn.execute("UPDATE users SET is_admin = 1 WHERE telegram_id = ?", (ADMIN_ID,))
     conn.commit()
     conn.close()
-    print(f"Admin rights granted to user ID: {ADMIN_ID}")
+    logger.info(f"Admin rights granted to user ID: {ADMIN_ID}")
 
-    # Create the Application and pass it your bot's token.
-    application = Application.builder().token(BOT_TOKEN).build()
-
-    # Conversation handler for user registration
+    # Register all handlers
     register_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("register", register_start)],
         states={
@@ -302,7 +298,6 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # Conversation handler for admin actions
     admin_conv_handler = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex('^➕ Add Tournament$'), add_tournament_start),
@@ -319,23 +314,18 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("myinfo", my_info))
     application.add_handler(CommandHandler("admin", admin_panel))
-    
-    # Admin simple commands
     application.add_handler(MessageHandler(filters.Regex('^📋 View Tournaments$'), view_tournaments))
-    
-    # Add conversation handlers
     application.add_handler(register_conv_handler)
     application.add_handler(admin_conv_handler)
+    
+    # Set the webhook
+    await application.bot.set_webhook(url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
+    logger.info(f"Webhook has been set to {WEBHOOK_URL}")
 
-    # Run the bot until the user presses Ctrl-C
-    print("Bot is running...")
-    application.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+# This check is important for WSGI servers like Gunicorn
+if __name__ != "__main__":
+    asyncio.run(setup_bot())
