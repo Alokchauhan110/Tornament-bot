@@ -1,4 +1,4 @@
-# main.py (Full-Featured Final Version)
+# main.py (The final, stable, and working version for Render)
 
 import logging
 import os
@@ -27,7 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- State Management ---
+# --- State Management for Startup ---
 app_initialized = False
 
 # --- Conversation States ---
@@ -35,9 +35,6 @@ app_initialized = False
  BROADCAST_MESSAGE, VIEW_REGISTRATIONS) = range(5)
 REGISTER_GET_USERNAME, REGISTER_GET_USERID = range(5, 7)
 (SEND_ROOM_GET_TID, SEND_ROOM_GET_RID, SEND_ROOM_GET_RPASS, SEND_ROOM_CONFIRM) = range(7, 11)
-(UNREGISTER_CHOICE) = range(11, 12)
-(DELETE_T_GET_ID, DELETE_T_CONFIRM) = range(12, 14)
-(KICK_GET_TID, KICK_GET_FFID, KICK_CONFIRM) = range(14, 17)
 
 
 # ========== GLOBAL APPLICATION OBJECT ==========
@@ -53,8 +50,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"🔥 Welcome, {user.first_name}! 🔥\n\n"
         "I am your Free Fire Tournament Bot.\n\n"
         "Use /register to join a tournament.\n"
-        "Use /unregister to leave a tournament.\n"
-        "Use /mytournaments to see your registrations.\n"
+        "Use /myinfo to see your details.\n"
         "Use /help to see all commands."
     )
 
@@ -63,14 +59,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "<b>Available Commands:</b>\n"
         "/start - Welcome message\n"
         "/register - Join an open tournament\n"
-        "/unregister - Leave a tournament\n"
-        "/mytournaments - See your registrations\n"
+        "/myinfo - View your registered FF username and ID\n"
         "/help - Show this message\n\n"
         "<b>Admin Commands:</b>\n"
         "/admin - Open the admin panel\n"
-        "/sendroom - Send Room ID/Pass to players\n"
-        "/deletetournament - Cancel a tournament\n"
-        "/kickplayer - Remove a player from a tournament"
+        "/sendroom - Send Room ID/Pass to players"
     )
     await update.message.reply_html(text)
 
@@ -79,30 +72,11 @@ async def my_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user_data and user_data['ff_username']:
         await update.message.reply_html(
             "<b>Your Information:</b>\n"
-            f"👤 Free Fire Name: <b>{user_data['ff_username']}</b>\n"
-            f"🔢 Free Fire ID: <code>{user_data['ff_userid']}</code>"
+            f"👤 Free Fire Name: {user_data['ff_username']}\n"
+            f"🔢 Free Fire ID: {user_data['ff_userid']}"
         )
     else:
         await update.message.reply_text("You haven't set your Free Fire info yet. Please /register for a tournament to set it.")
-
-async def my_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Shows the user a list of tournaments they are registered for."""
-    user_id = update.effective_user.id
-    registrations = db.get_user_registrations(user_id)
-    if not registrations:
-        await update.message.reply_text("You are not registered for any upcoming tournaments.")
-        return
-
-    response = "<b>You are registered for the following tournaments:</b>\n\n"
-    for reg in registrations:
-        mode = "Battle Royale" if reg['mode'] == 'BR' else "Clash Squad"
-        response += f"🔹 <b>{mode}</b> on {reg['date_time']}\n"
-    
-    await update.message.reply_html(response)
-
-# --- (All other handler functions like register, admin, etc., are below) ---
-# ...
-# --- The rest of the file is complete below ---
 
 # --- Registration Process ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -160,35 +134,6 @@ async def register_get_userid(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("You are already registered for this tournament.")
     return ConversationHandler.END
 
-# --- Unregister Process ---
-async def unregister_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    registrations = db.get_user_registrations(user_id)
-    if not registrations:
-        await update.message.reply_text("You are not registered for any tournaments to leave.")
-        return ConversationHandler.END
-
-    keyboard = []
-    for reg in registrations:
-        mode = "Battle Royale" if reg['mode'] == 'BR' else "Clash Squad"
-        button_text = f"Leave: {mode} on {reg['date_time']}"
-        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"unregister_{reg['id']}")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Which tournament would you like to unregister from?", reply_markup=reply_markup)
-    return UNREGISTER_CHOICE
-
-async def unregister_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    tournament_id = int(query.data.split('_')[1])
-    user_id = query.from_user.id
-    
-    db.unregister_user_from_tournament(tournament_id, user_id)
-    
-    await query.edit_message_text("✅ You have been successfully unregistered from the tournament.")
-    return ConversationHandler.END
-
 # --- Admin Panel & Related Commands ---
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not db.is_admin(update.effective_user.id):
@@ -196,92 +141,265 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     keyboard = [['➕ Add Tournament', '📢 Broadcast'], ['📋 View Tournaments', '👥 View Registrations']]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-    await update.message.reply_text("Welcome to the Admin Panel.", reply_markup=reply_markup)
+    await update.message.reply_text("Welcome to the Admin Panel. Choose an option:\n\nUse /sendroom to send match details.", reply_markup=reply_markup)
 
-# ... (Add, Broadcast, View, Send Room functions are here) ...
-
-# --- Kick Player Feature (Admin) ---
-async def kick_player_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def add_tournament_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not db.is_admin(update.effective_user.id): return ConversationHandler.END
-    await update.message.reply_text("Enter the Tournament ID to kick a player from.")
-    return KICK_GET_TID
+    keyboard = [['Battle Royale (50)', 'Clash Squad (8)']]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text("Select tournament mode:", reply_markup=reply_markup)
+    return ADD_TOURNAMENT_MODE
 
-async def kick_player_get_tid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        tournament_id = int(update.message.text)
-        if not db.get_tournament_details(tournament_id):
-            await update.message.reply_text("Tournament not found. /cancel")
-            return ConversationHandler.END
-        context.user_data['kick_tid'] = tournament_id
-        await update.message.reply_text("Got it. Now enter the Free Fire ID of the player you want to kick.")
-        return KICK_GET_FFID
-    except ValueError:
-        await update.message.reply_text("Invalid ID. Please enter a number.")
-        return KICK_GET_TID
-
-async def kick_player_get_ffid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    ff_userid = update.message.text
-    tid = context.user_data['kick_tid']
-    
-    kicked = db.kick_player(tid, ff_userid)
-    
-    if kicked:
-        await update.message.reply_text(f"✅ Player with FF ID {ff_userid} has been kicked from tournament {tid}.")
+async def add_tournament_get_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    mode_text = update.message.text
+    if 'Battle Royale' in mode_text:
+        context.user_data['mode'] = 'BR'
+        context.user_data['max_players'] = 50
+    elif 'Clash Squad' in mode_text:
+        context.user_data['mode'] = 'CS'
+        context.user_data['max_players'] = 8
     else:
-        await update.message.reply_text(f"Could not find a player with FF ID {ff_userid} registered in tournament {tid}.")
-        
+        await update.message.reply_text("Invalid mode. Please choose from the keyboard.")
+        return ADD_TOURNAMENT_MODE
+    await update.message.reply_text("Enter the date and time (e.g., 'July 10, 9:00 PM'):")
+    return ADD_TOURNAMENT_DATETIME
+
+async def add_tournament_get_datetime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['date_time'] = update.message.text
+    await update.message.reply_text("Enter the registration fee (enter 0 for free):")
+    return ADD_TOURNAMENT_FEE
+
+async def add_tournament_get_fee(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        fee = int(update.message.text)
+        db.add_tournament(
+            mode=context.user_data['mode'],
+            date_time=context.user_data['date_time'],
+            fee=fee,
+            max_players=context.user_data['max_players']
+        )
+        await update.message.reply_text("✅ Tournament successfully created!")
+        return ConversationHandler.END
+    except ValueError:
+        await update.message.reply_text("Invalid fee. Please enter a number.")
+        return ADD_TOURNAMENT_FEE
+
+async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not db.is_admin(update.effective_user.id): return ConversationHandler.END
+    await update.message.reply_text("Please send the message you want to broadcast to all users.")
+    return BROADCAST_MESSAGE
+
+async def broadcast_get_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message_to_send = update.message.text
+    user_ids = db.get_all_user_ids()
+    sent_count = 0
+    for user_id in user_ids:
+        try:
+            await context.bot.send_message(chat_id=user_id, text=f"📢 **Admin Broadcast**\n\n{message_to_send}", parse_mode='Markdown')
+            sent_count += 1
+        except Exception as e:
+            logger.error(f"Could not send broadcast to {user_id}: {e}")
+    await update.message.reply_text(f"Broadcast sent to {sent_count}/{len(user_ids)} users.")
     return ConversationHandler.END
 
-# --- Delete Tournament Feature (Admin) ---
-async def delete_tournament_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not db.is_admin(update.effective_user.id): return ConversationHandler.END
-    await update.message.reply_text("Enter the Tournament ID you wish to permanently delete.")
-    return DELETE_T_GET_ID
+async def view_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not db.is_admin(update.effective_user.id): return
+    tournaments = db.get_open_tournaments()
+    if not tournaments:
+        await update.message.reply_text("No open tournaments found.")
+        return
+    response = "<b>Open Tournaments:</b>\n\n"
+    for t in tournaments:
+        mode = "Battle Royale" if t['mode'] == 'BR' else "Clash Squad"
+        regs = len(db.get_registrations_for_tournament(t['id']))
+        response += f"<b>ID: {t['id']}</b> | {mode}\n"
+        response += f"  - Date: {t['date_time']}\n"
+        response += f"  - Fee: {t['fee']}\n"
+        response += f"  - Registered: {regs}/{t['max_players']}\n\n"
+    await update.message.reply_html(response)
 
-async def delete_tournament_get_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def view_registrations_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not db.is_admin(update.effective_user.id): return ConversationHandler.END
+    await update.message.reply_text("Please enter the Tournament ID to view its registrations.")
+    return VIEW_REGISTRATIONS
+
+async def view_registrations_get_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         tournament_id = int(update.message.text)
-        if not db.get_tournament_details(tournament_id):
-            await update.message.reply_text("Tournament not found. /cancel")
+        registrations = db.get_registrations_for_tournament(tournament_id)
+        tournament = db.get_tournament_details(tournament_id)
+        if not tournament:
+            await update.message.reply_text("Tournament with that ID not found.")
             return ConversationHandler.END
-        context.user_data['delete_tid'] = tournament_id
-        await update.message.reply_text(f"This will delete tournament {tournament_id} and all its registrations forever. This cannot be undone.\n\nType `YES` to confirm.")
-        return DELETE_T_CONFIRM
+        if not registrations:
+            await update.message.reply_text(f"No one has registered for Tournament ID {tournament_id} yet.")
+            return ConversationHandler.END
+        response = f"<b>Registrations for Tournament ID {tournament_id}:</b>\n"
+        response += f"({tournament['mode']} on {tournament['date_time']})\n\n"
+        for i, reg in enumerate(registrations, 1):
+            response += f"{i}. {reg['ff_username']} (ID: {reg['ff_userid']})\n"
+        await update.message.reply_html(response)
     except ValueError:
         await update.message.reply_text("Invalid ID. Please enter a number.")
-        return DELETE_T_GET_ID
-
-async def delete_tournament_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message.text == "YES":
-        tid = context.user_data['delete_tid']
-        db.delete_tournament(tid)
-        await update.message.reply_text(f"✅ Tournament {tid} and all its registrations have been deleted.")
-    else:
-        await update.message.reply_text("Confirmation failed. Operation cancelled.")
-        
     return ConversationHandler.END
 
-# --- (Other admin functions like add, broadcast, etc.) ---
-# ... (These are unchanged and are included in the final code block) ...
+# --- Send Room Details Feature ---
+async def send_room_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not db.is_admin(update.effective_user.id):
+        await update.message.reply_text("This is an admin-only command.")
+        return ConversationHandler.END
+    await update.message.reply_text("Okay, let's send some room details. What is the Tournament ID?")
+    return SEND_ROOM_GET_TID
 
-# ========== FLASK WEB SERVER & WEBHOOK LOGIC ==========
+async def send_room_get_tid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        tournament_id = int(update.message.text)
+        tournament = db.get_tournament_details(tournament_id)
+        if not tournament:
+            await update.message.reply_text("Sorry, I can't find a tournament with that ID. Please try again or /cancel.")
+            return SEND_ROOM_GET_TID
+        context.user_data['send_room_tid'] = tournament_id
+        await update.message.reply_text("Great. Now, what is the Room ID?")
+        return SEND_ROOM_GET_RID
+    except ValueError:
+        await update.message.reply_text("That's not a valid number. Please enter the Tournament ID.")
+        return SEND_ROOM_GET_TID
+
+async def send_room_get_rid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['send_room_rid'] = update.message.text
+    await update.message.reply_text("Got it. And the Room Password?")
+    return SEND_ROOM_GET_RPASS
+
+async def send_room_get_rpass(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['send_room_rpass'] = update.message.text
+    tid = context.user_data['send_room_tid']
+    rid = context.user_data['send_room_rid']
+    rpass = context.user_data['send_room_rpass']
+    registrations = db.get_registrations_for_tournament(tid)
+    player_count = len(registrations)
+    if player_count == 0:
+        await update.message.reply_text("There are no players registered for this tournament. Nothing to send. /cancel")
+        return ConversationHandler.END
+    confirmation_text = (
+        f"🚨 **Please Confirm** 🚨\n\n"
+        f"You are about to send the following details:\n"
+        f"  - **Tournament ID:** {tid}\n"
+        f"  - **Room ID:** `{rid}`\n"
+        f"  - **Password:** `{rpass}`\n\n"
+        f"This will be sent to **{player_count}** registered players.\n\n"
+        f"Are you sure you want to proceed?"
+    )
+    keyboard = [[InlineKeyboardButton("✅ Yes, Send It!", callback_data="send_room_confirm_yes"),
+                 InlineKeyboardButton("❌ No, Cancel", callback_data="send_room_confirm_no")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_html(confirmation_text, reply_markup=reply_markup)
+    return SEND_ROOM_CONFIRM
+
+async def send_room_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    if query.data == "send_room_confirm_no":
+        await query.edit_message_text("Operation cancelled. Nothing was sent.")
+        return ConversationHandler.END
+    await query.edit_message_text("Sending messages... Please wait.")
+    tid = context.user_data['send_room_tid']
+    rid = context.user_data['send_room_rid']
+    rpass = context.user_data['send_room_rpass']
+    registrations = db.get_registrations_for_tournament(tid)
+    tournament = db.get_tournament_details(tid)
+    mode = "Battle Royale" if tournament['mode'] == 'BR' else "Clash Squad"
+    message_to_send = (
+        f"🔥 **Tournament Room Details!** 🔥\n\n"
+        f"Here are the details for your upcoming **{mode}** tournament on **{tournament['date_time']}**.\n\n"
+        f"🔑 **Room ID:** `{rid}`\n"
+        f"🔒 **Password:** `{rpass}`\n\n"
+        f"Please join the room quickly. Good luck!"
+    )
+    sent_count = 0
+    failed_count = 0
+    for reg in registrations:
+        try:
+            await context.bot.send_message(chat_id=reg['telegram_id'], text=message_to_send, parse_mode='Markdown')
+            sent_count += 1
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            logger.error(f"Failed to send room details to {reg['telegram_id']}: {e}")
+            failed_count += 1
+    await query.edit_message_text(f"✅ Done!\n\nRoom details sent to {sent_count} players.\nFailed to send to {failed_count} players (they may have blocked the bot).")
+    return ConversationHandler.END
+
+# --- General Utility ---
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Operation cancelled.")
+    return ConversationHandler.END
+
+
+# --- Add all handlers to the application object ---
+register_conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("register", register_start)],
+    states={
+        REGISTER_GET_USERNAME: [
+            CallbackQueryHandler(register_tournament_choice, pattern='^register_'),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, register_get_username),
+        ],
+        REGISTER_GET_USERID: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_get_userid)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+admin_conv_handler = ConversationHandler(
+    entry_points=[
+        MessageHandler(filters.Regex('^➕ Add Tournament$'), add_tournament_start),
+        MessageHandler(filters.Regex('^📢 Broadcast$'), broadcast_start),
+        MessageHandler(filters.Regex('^👥 View Registrations$'), view_registrations_start)
+    ],
+    states={
+        ADD_TOURNAMENT_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_tournament_get_mode)],
+        ADD_TOURNAMENT_DATETIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_tournament_get_datetime)],
+        ADD_TOURNAMENT_FEE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_tournament_get_fee)],
+        BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_get_message)],
+        VIEW_REGISTRATIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, view_registrations_get_id)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+send_room_handler = ConversationHandler(
+    entry_points=[CommandHandler("sendroom", send_room_start)],
+    states={
+        SEND_ROOM_GET_TID: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_tid)],
+        SEND_ROOM_GET_RID: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_rid)],
+        SEND_ROOM_GET_RPASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_rpass)],
+        SEND_ROOM_CONFIRM: [CallbackQueryHandler(send_room_confirm)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("help", help_command))
+application.add_handler(CommandHandler("myinfo", my_info))
+application.add_handler(CommandHandler("admin", admin_panel))
+application.add_handler(MessageHandler(filters.Regex('^📋 View Tournaments$'), view_tournaments))
+application.add_handler(register_conv_handler)
+application.add_handler(admin_conv_handler)
+application.add_handler(send_room_handler)
+
+
+# ========== WEB SERVER SETUP ==========
 
 app = Flask(__name__)
 
 @app.before_first_request
 async def startup():
-    """Run startup tasks on the first request."""
+    """Runs startup tasks only on the very first request to the server."""
     global app_initialized
     if not app_initialized:
-        await application.initialize()
         db.setup_database()
         conn = db.get_db_connection()
         conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (ADMIN_ID,))
         conn.execute("UPDATE users SET is_admin = 1 WHERE telegram_id = ?", (ADMIN_ID,))
         conn.commit()
         conn.close()
-        logger.info("Application initialized and database setup complete.")
+        await application.initialize()
         app_initialized = True
+        logger.info("Application initialized and database setup complete.")
 
 @app.route("/")
 def index():
@@ -294,7 +412,3 @@ async def webhook():
         Update.de_json(request.get_json(force=True), application.bot)
     )
     return "ok"
-
-# Add all handlers to the application object
-# (All handlers, including the new ones, are registered here)
-# ...
