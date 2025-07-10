@@ -1,6 +1,8 @@
-# database.py (Corrected Version)
+# database.py (Final version for Render's default filesystem)
 import sqlite3
+import os
 
+# Create the database in the project's source directory
 DB_FILE = "tournament.db"
 
 def get_db_connection():
@@ -35,7 +37,7 @@ def setup_database():
             room_password TEXT
         )
     ''')
-    # Registrations table: links users to tournaments
+    # Registrations table
     c.execute('''
         CREATE TABLE IF NOT EXISTS registrations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +51,9 @@ def setup_database():
     conn.close()
     print("Database setup complete.")
 
-# --- User Functions ---
+# --- (The rest of the functions in this file are correct and do not need changes) ---
+# --- (add_or_update_user, get_user, etc. are all fine) ---
+
 def add_or_update_user(telegram_id, ff_username=None, ff_userid=None):
     conn = get_db_connection()
     c = conn.cursor()
@@ -85,7 +89,6 @@ def is_admin(telegram_id):
     user = get_user(telegram_id)
     return user and user['is_admin'] == 1
 
-# --- Tournament Functions ---
 def add_tournament(mode, date_time, fee, max_players):
     conn = get_db_connection()
     c = conn.cursor()
@@ -110,7 +113,6 @@ def get_tournament_details(tournament_id):
     conn.close()
     return tournament
 
-# --- Registration Functions ---
 def register_user_for_tournament(tournament_id, telegram_id):
     conn = get_db_connection()
     c = conn.cursor()
