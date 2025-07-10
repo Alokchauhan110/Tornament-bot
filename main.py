@@ -1,4 +1,4 @@
-# main.py (Final complete version with all features, including /sendroom)
+# main.py (Final complete version with all features and fixes for Render/Uvicorn)
 
 import logging
 import os
@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 (ADD_TOURNAMENT_MODE, ADD_TOURNAMENT_DATETIME, ADD_TOURNAMENT_FEE,
  BROADCAST_MESSAGE, VIEW_REGISTRATIONS) = range(5)
 REGISTER_GET_USERNAME, REGISTER_GET_USERID = range(5, 7)
-# New states for the /sendroom feature
 (SEND_ROOM_GET_TID, SEND_ROOM_GET_RID, SEND_ROOM_GET_RPASS, SEND_ROOM_CONFIRM) = range(7, 11)
 
 
@@ -247,7 +246,7 @@ async def view_registrations_get_id(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("Invalid ID. Please enter a number.")
     return ConversationHandler.END
 
-# --- NEW FEATURE: Send Room Details ---
+# --- Send Room Details Feature ---
 async def send_room_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not db.is_admin(update.effective_user.id):
         await update.message.reply_text("This is an admin-only command.")
@@ -337,6 +336,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
 
+
 # ========== WEB SERVER & BOT SETUP ==========
 
 application = Application.builder().token(BOT_TOKEN).build()
@@ -353,8 +353,9 @@ async def webhook():
     await application.process_update(update)
     return "ok"
 
+@app.before_serving
 async def setup_bot():
-    """Initializes the bot and sets up all handlers."""
+    """Initializes the bot and sets up all handlers. Runs once before the server starts."""
     await application.initialize()
     db.setup_database()
 
@@ -416,5 +417,4 @@ async def setup_bot():
     
     logger.info("Bot setup complete. Handlers are registered and application is initialized.")
 
-if __name__ != "__main__":
-    asyncio.run(setup_bot())
+# The if __name__ == "__main__" block is intentionally removed as it's handled by @app.before_serving
