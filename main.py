@@ -1,4 +1,4 @@
-# main.py (Complete version for Render Webhook Deployment)
+# main.py (Final version for Render Deployment)
 
 import logging
 import os
@@ -17,12 +17,9 @@ from telegram.ext import (
 from flask import Flask, request
 
 # --- Configuration ---
-# Get secrets from Render's Environment Variables
-# Make sure you set these in the Render dashboard!
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID"))
-# Render provides this URL automatically
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL") # Render provides this automatically
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -36,11 +33,11 @@ logger = logging.getLogger(__name__)
 REGISTER_GET_USERNAME, REGISTER_GET_USERID = range(5, 7)
 
 
-# ========== USER COMMANDS & HANDLERS (No changes from original) ==========
+# ========== USER COMMANDS & HANDLERS ==========
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    db.add_or_update_user(user.id) # Add user to DB if not exists
+    db.add_or_update_user(user.id)
     await update.message.reply_html(
         f"🔥 Welcome, {user.first_name}! 🔥\n\n"
         "I am your Free Fire Tournament Bot.\n\n"
@@ -251,33 +248,25 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
 
-# ========== NEW SECTION: FLASK WEB SERVER & WEBHOOK SETUP ==========
+# ========== WEB SERVER & BOT SETUP ==========
 
-# Initialize the Bot Application globally
 application = Application.builder().token(BOT_TOKEN).build()
-
-# Initialize the Flask app
 app = Flask(__name__)
 
 @app.route("/")
 def index():
-    """ A simple page to confirm the web server is running. """
     return "Hello, I am your Free Fire Bot and I am running!"
 
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 async def webhook():
-    """This endpoint receives the updates from Telegram."""
     update_json = request.get_json(force=True)
     update = Update.de_json(update_json, application.bot)
     await application.process_update(update)
     return "ok"
 
 async def setup_bot():
-    """Sets up the bot and the webhook when the server starts."""
-    # Ensure the database is set up
     db.setup_database()
 
-    # Grant admin rights on startup
     conn = db.get_db_connection()
     conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (ADMIN_ID,))
     conn.execute("UPDATE users SET is_admin = 1 WHERE telegram_id = ?", (ADMIN_ID,))
@@ -285,7 +274,6 @@ async def setup_bot():
     conn.close()
     logger.info(f"Admin rights granted to user ID: {ADMIN_ID}")
 
-    # Register all handlers
     register_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("register", register_start)],
         states={
@@ -322,10 +310,9 @@ async def setup_bot():
     application.add_handler(register_conv_handler)
     application.add_handler(admin_conv_handler)
     
-    # Set the webhook
-    await application.bot.set_webhook(url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    logger.info(f"Webhook has been set to {WEBHOOK_URL}")
+    ## IMPORTANT: THE WEBHOOK IS NO LONGER SET HERE.
+    ## WE WILL SET IT MANUALLY ONCE THE SERVER IS LIVE.
+    logger.info("Bot setup complete. Handlers are registered.")
 
-# This check is important for WSGI servers like Gunicorn
 if __name__ != "__main__":
     asyncio.run(setup_bot())
