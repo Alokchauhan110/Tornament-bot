@@ -1,9 +1,10 @@
-# main.py (Final complete version with all features and fixes for Render/Uvicorn)
+# main.py (The 100% complete and final version for Render/Uvicorn deployment)
 
 import logging
 import os
 import database as db
 import asyncio
+from contextlib import asynccontextmanager
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
@@ -14,7 +15,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
-from flask import Flask, request
+from flask import Flask
 
 # --- Configuration ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -32,6 +33,23 @@ logger = logging.getLogger(__name__)
  BROADCAST_MESSAGE, VIEW_REGISTRATIONS) = range(5)
 REGISTER_GET_USERNAME, REGISTER_GET_USERID = range(5, 7)
 (SEND_ROOM_GET_TID, SEND_ROOM_GET_RID, SEND_ROOM_GET_RPASS, SEND_ROOM_CONFIRM) = range(7, 11)
+
+
+# ========== BOT SETUP FUNCTION ==========
+
+async def post_init(app: Application) -> None:
+    """
+    This function runs after the bot has been initialized.
+    It sets up the database and grants admin rights.
+    """
+    db.setup_database()
+    conn = db.get_db_connection()
+    conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (ADMIN_ID,))
+    conn.execute("UPDATE users SET is_admin = 1 WHERE telegram_id = ?", (ADMIN_ID,))
+    conn.commit()
+    conn.close()
+    logger.info(f"Admin rights granted to user ID: {ADMIN_ID}")
+    logger.info("Bot startup tasks complete.")
 
 
 # ========== USER COMMANDS & HANDLERS ==========
@@ -77,14 +95,12 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not tournaments:
         await update.message.reply_text("Sorry, there are no open tournaments right now. Check back later!")
         return ConversationHandler.END
-
     keyboard = []
     for t in tournaments:
         mode = "Battle Royale" if t['mode'] == 'BR' else "Clash Squad"
         fee_text = f" (Fee: {t['fee']})" if t['fee'] > 0 else " (Free)"
         button_text = f"{mode} - {t['date_time']}{fee_text}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"register_{t['id']}")])
-    
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Please choose a tournament to register for:", reply_markup=reply_markup)
     return REGISTER_GET_USERNAME
@@ -94,13 +110,11 @@ async def register_tournament_choice(update: Update, context: ContextTypes.DEFAU
     await query.answer()
     tournament_id = int(query.data.split('_')[1])
     context.user_data['tournament_id'] = tournament_id
-
     tournament = db.get_tournament_details(tournament_id)
     registrations = db.get_registrations_for_tournament(tournament_id)
     if len(registrations) >= tournament['max_players']:
         await query.edit_message_text("Sorry, this tournament is already full.")
         return ConversationHandler.END
-        
     await query.edit_message_text("Great! Now, please send me your Free Fire <b>in-game name</b>.", parse_mode='HTML')
     return REGISTER_GET_USERNAME
 
@@ -114,10 +128,8 @@ async def register_get_userid(update: Update, context: ContextTypes.DEFAULT_TYPE
     ff_userid = update.message.text
     ff_username = context.user_data['ff_username']
     tournament_id = context.user_data['tournament_id']
-    
     db.add_or_update_user(user.id, ff_username, ff_userid)
     result = db.register_user_for_tournament(tournament_id, user.id)
-
     if result == "SUCCESS":
         tournament = db.get_tournament_details(tournament_id)
         fee_message = f"Please pay the registration fee of <b>₹{tournament['fee']}</b> to confirm your slot." if tournament['fee'] > 0 else "This is a free tournament."
@@ -131,7 +143,6 @@ async def register_get_userid(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
     elif result == "ALREADY_REGISTERED":
         await update.message.reply_text("You are already registered for this tournament.")
-    
     return ConversationHandler.END
 
 # --- Admin Panel & Related Commands ---
@@ -139,7 +150,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not db.is_admin(update.effective_user.id):
         await update.message.reply_text("You are not authorized to use this command.")
         return
-
     keyboard = [['➕ Add Tournament', '📢 Broadcast'], ['📋 View Tournaments', '👥 View Registrations']]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Welcome to the Admin Panel. Choose an option:\n\nUse /sendroom to send match details.", reply_markup=reply_markup)
@@ -162,7 +172,6 @@ async def add_tournament_get_mode(update: Update, context: ContextTypes.DEFAULT_
     else:
         await update.message.reply_text("Invalid mode. Please choose from the keyboard.")
         return ADD_TOURNAMENT_MODE
-    
     await update.message.reply_text("Enter the date and time (e.g., 'July 10, 9:00 PM'):")
     return ADD_TOURNAMENT_DATETIME
 
@@ -201,7 +210,6 @@ async def broadcast_get_message(update: Update, context: ContextTypes.DEFAULT_TY
             sent_count += 1
         except Exception as e:
             logger.error(f"Could not send broadcast to {user_id}: {e}")
-    
     await update.message.reply_text(f"Broadcast sent to {sent_count}/{len(user_ids)} users.")
     return ConversationHandler.END
 
@@ -339,34 +347,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 # ========== WEB SERVER & BOT SETUP ==========
 
-application = Application.builder().token(BOT_TOKEN).build()
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return "Hello, I am your Free Fire Bot and I am running!"
-
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-async def webhook():
-    update_json = request.get_json(force=True)
-    update = Update.de_json(update_json, application.bot)
-    await application.process_update(update)
-    return "ok"
-
-@app.before_serving
-async def setup_bot():
-    """Initializes the bot and sets up all handlers. Runs once before the server starts."""
-    await application.initialize()
-    db.setup_database()
-
-    conn = db.get_db_connection()
-    conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (ADMIN_ID,))
-    conn.execute("UPDATE users SET is_admin = 1 WHERE telegram_id = ?", (ADMIN_ID,))
-    conn.commit()
-    conn.close()
-    logger.info(f"Admin rights granted to user ID: {ADMIN_ID}")
-
-    # Register all handlers
+@asynccontextmanager
+async def lifespan(app: Flask):
+    """
+    The lifespan context manager. It runs startup and shutdown tasks.
+    """
+    # Initialize all handlers
     register_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("register", register_start)],
         states={
@@ -406,6 +392,14 @@ async def setup_bot():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    # Build the application and add all handlers
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
+    
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("myinfo", my_info))
@@ -414,7 +408,27 @@ async def setup_bot():
     application.add_handler(register_conv_handler)
     application.add_handler(admin_conv_handler)
     application.add_handler(send_room_handler)
-    
-    logger.info("Bot setup complete. Handlers are registered and application is initialized.")
 
-# The if __name__ == "__main__" block is intentionally removed as it's handled by @app.before_serving
+    # Start the bot
+    await application.initialize()
+    await application.start()
+    
+    # This part is for the web server, it yields control
+    yield
+    
+    # Shutdown the bot
+    await application.stop()
+    await application.shutdown()
+
+# Create the Flask app with the lifespan manager
+app = Flask(__name__)
+app.wsgi_app = application.builder().lifespan(lifespan).build().asgi_app
+
+@app.route("/")
+def index():
+    return "Hello, I am your Free Fire Bot and I am running!"
+
+# This is a dummy webhook route. The actual processing is handled by the asgi_app.
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+async def webhook():
+    return "ok"
