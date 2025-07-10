@@ -1,4 +1,4 @@
-# main.py (Final version for Render Deployment)
+# main.py (Final complete version with all features, including /sendroom)
 
 import logging
 import os
@@ -19,7 +19,7 @@ from flask import Flask, request
 # --- Configuration ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID"))
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL") # Render provides this automatically
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 (ADD_TOURNAMENT_MODE, ADD_TOURNAMENT_DATETIME, ADD_TOURNAMENT_FEE,
  BROADCAST_MESSAGE, VIEW_REGISTRATIONS) = range(5)
 REGISTER_GET_USERNAME, REGISTER_GET_USERID = range(5, 7)
+# New states for the /sendroom feature
+(SEND_ROOM_GET_TID, SEND_ROOM_GET_RID, SEND_ROOM_GET_RPASS, SEND_ROOM_CONFIRM) = range(7, 11)
 
 
 # ========== USER COMMANDS & HANDLERS ==========
@@ -54,7 +56,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/myinfo - View your registered FF username and ID\n"
         "/help - Show this message\n\n"
         "<b>Admin Commands:</b>\n"
-        "/admin - Open the admin panel"
+        "/admin - Open the admin panel\n"
+        "/sendroom - Send Room ID/Pass to players"
     )
     await update.message.reply_html(text)
 
@@ -132,7 +135,7 @@ async def register_get_userid(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     return ConversationHandler.END
 
-# --- Admin Commands ---
+# --- Admin Panel & Related Commands ---
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not db.is_admin(update.effective_user.id):
         await update.message.reply_text("You are not authorized to use this command.")
@@ -140,7 +143,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     keyboard = [['➕ Add Tournament', '📢 Broadcast'], ['📋 View Tournaments', '👥 View Registrations']]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-    await update.message.reply_text("Welcome to the Admin Panel. Choose an option:", reply_markup=reply_markup)
+    await update.message.reply_text("Welcome to the Admin Panel. Choose an option:\n\nUse /sendroom to send match details.", reply_markup=reply_markup)
 
 async def add_tournament_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not db.is_admin(update.effective_user.id): return ConversationHandler.END
@@ -161,7 +164,7 @@ async def add_tournament_get_mode(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("Invalid mode. Please choose from the keyboard.")
         return ADD_TOURNAMENT_MODE
     
-    await update.message.reply_text("Enter the date and time (e.g., 'May 25, 8:00 PM'):")
+    await update.message.reply_text("Enter the date and time (e.g., 'July 10, 9:00 PM'):")
     return ADD_TOURNAMENT_DATETIME
 
 async def add_tournament_get_datetime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -244,6 +247,92 @@ async def view_registrations_get_id(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("Invalid ID. Please enter a number.")
     return ConversationHandler.END
 
+# --- NEW FEATURE: Send Room Details ---
+async def send_room_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not db.is_admin(update.effective_user.id):
+        await update.message.reply_text("This is an admin-only command.")
+        return ConversationHandler.END
+    await update.message.reply_text("Okay, let's send some room details. What is the Tournament ID?")
+    return SEND_ROOM_GET_TID
+
+async def send_room_get_tid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        tournament_id = int(update.message.text)
+        tournament = db.get_tournament_details(tournament_id)
+        if not tournament:
+            await update.message.reply_text("Sorry, I can't find a tournament with that ID. Please try again or /cancel.")
+            return SEND_ROOM_GET_TID
+        context.user_data['send_room_tid'] = tournament_id
+        await update.message.reply_text("Great. Now, what is the Room ID?")
+        return SEND_ROOM_GET_RID
+    except ValueError:
+        await update.message.reply_text("That's not a valid number. Please enter the Tournament ID.")
+        return SEND_ROOM_GET_TID
+
+async def send_room_get_rid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['send_room_rid'] = update.message.text
+    await update.message.reply_text("Got it. And the Room Password?")
+    return SEND_ROOM_GET_RPASS
+
+async def send_room_get_rpass(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['send_room_rpass'] = update.message.text
+    tid = context.user_data['send_room_tid']
+    rid = context.user_data['send_room_rid']
+    rpass = context.user_data['send_room_rpass']
+    registrations = db.get_registrations_for_tournament(tid)
+    player_count = len(registrations)
+    if player_count == 0:
+        await update.message.reply_text("There are no players registered for this tournament. Nothing to send. /cancel")
+        return ConversationHandler.END
+    confirmation_text = (
+        f"🚨 **Please Confirm** 🚨\n\n"
+        f"You are about to send the following details:\n"
+        f"  - **Tournament ID:** {tid}\n"
+        f"  - **Room ID:** `{rid}`\n"
+        f"  - **Password:** `{rpass}`\n\n"
+        f"This will be sent to **{player_count}** registered players.\n\n"
+        f"Are you sure you want to proceed?"
+    )
+    keyboard = [[InlineKeyboardButton("✅ Yes, Send It!", callback_data="send_room_confirm_yes"),
+                 InlineKeyboardButton("❌ No, Cancel", callback_data="send_room_confirm_no")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_html(confirmation_text, reply_markup=reply_markup)
+    return SEND_ROOM_CONFIRM
+
+async def send_room_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    if query.data == "send_room_confirm_no":
+        await query.edit_message_text("Operation cancelled. Nothing was sent.")
+        return ConversationHandler.END
+    await query.edit_message_text("Sending messages... Please wait.")
+    tid = context.user_data['send_room_tid']
+    rid = context.user_data['send_room_rid']
+    rpass = context.user_data['send_room_rpass']
+    registrations = db.get_registrations_for_tournament(tid)
+    tournament = db.get_tournament_details(tid)
+    mode = "Battle Royale" if tournament['mode'] == 'BR' else "Clash Squad"
+    message_to_send = (
+        f"🔥 **Tournament Room Details!** 🔥\n\n"
+        f"Here are the details for your upcoming **{mode}** tournament on **{tournament['date_time']}**.\n\n"
+        f"🔑 **Room ID:** `{rid}`\n"
+        f"🔒 **Password:** `{rpass}`\n\n"
+        f"Please join the room quickly. Good luck!"
+    )
+    sent_count = 0
+    failed_count = 0
+    for reg in registrations:
+        try:
+            await context.bot.send_message(chat_id=reg['telegram_id'], text=message_to_send, parse_mode='Markdown')
+            sent_count += 1
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            logger.error(f"Failed to send room details to {reg['telegram_id']}: {e}")
+            failed_count += 1
+    await query.edit_message_text(f"✅ Done!\n\nRoom details sent to {sent_count} players.\nFailed to send to {failed_count} players (they may have blocked the bot).")
+    return ConversationHandler.END
+
+# --- General Utility ---
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
@@ -265,6 +354,8 @@ async def webhook():
     return "ok"
 
 async def setup_bot():
+    """Initializes the bot and sets up all handlers."""
+    await application.initialize()
     db.setup_database()
 
     conn = db.get_db_connection()
@@ -274,6 +365,7 @@ async def setup_bot():
     conn.close()
     logger.info(f"Admin rights granted to user ID: {ADMIN_ID}")
 
+    # Register all handlers
     register_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("register", register_start)],
         states={
@@ -301,6 +393,17 @@ async def setup_bot():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
+    
+    send_room_handler = ConversationHandler(
+        entry_points=[CommandHandler("sendroom", send_room_start)],
+        states={
+            SEND_ROOM_GET_TID: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_tid)],
+            SEND_ROOM_GET_RID: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_rid)],
+            SEND_ROOM_GET_RPASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_room_get_rpass)],
+            SEND_ROOM_CONFIRM: [CallbackQueryHandler(send_room_confirm)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
@@ -309,10 +412,9 @@ async def setup_bot():
     application.add_handler(MessageHandler(filters.Regex('^📋 View Tournaments$'), view_tournaments))
     application.add_handler(register_conv_handler)
     application.add_handler(admin_conv_handler)
+    application.add_handler(send_room_handler)
     
-    ## IMPORTANT: THE WEBHOOK IS NO LONGER SET HERE.
-    ## WE WILL SET IT MANUALLY ONCE THE SERVER IS LIVE.
-    logger.info("Bot setup complete. Handlers are registered.")
+    logger.info("Bot setup complete. Handlers are registered and application is initialized.")
 
 if __name__ != "__main__":
     asyncio.run(setup_bot())
