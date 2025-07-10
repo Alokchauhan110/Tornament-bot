@@ -1,10 +1,9 @@
-# main.py (Final corrected version using the stable API for lifespan integration)
+# main.py (Final version, simplified and corrected for Render)
 
 import logging
 import os
 import database as db
 import asyncio
-from contextlib import asynccontextmanager
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
@@ -15,7 +14,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
-from flask import Flask
+from flask import Flask, request
 
 # --- Configuration ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -35,30 +34,12 @@ REGISTER_GET_USERNAME, REGISTER_GET_USERID = range(5, 7)
 (SEND_ROOM_GET_TID, SEND_ROOM_GET_RID, SEND_ROOM_GET_RPASS, SEND_ROOM_CONFIRM) = range(7, 11)
 
 
-# ========== BOT STARTUP FUNCTION ==========
-
-async def post_init(app: Application) -> None:
-    db.setup_database()
-    conn = db.get_db_connection()
-    conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (ADMIN_ID,))
-    conn.execute("UPDATE users SET is_admin = 1 WHERE telegram_id = ?", (ADMIN_ID,))
-    conn.commit()
-    conn.close()
-    logger.info(f"Admin rights granted to user ID: {ADMIN_ID}")
-    logger.info("Bot startup tasks complete.")
-
-
-# ========== GLOBAL APPLICATION & FLASK OBJECTS ==========
-
-# This builder will be used to create the final application with the lifespan
-ptb_builder = Application.builder().token(BOT_TOKEN).post_init(post_init)
-
-# Create the Flask app that will be run by Uvicorn
-app = Flask(__name__)
+# ========== GLOBAL APPLICATION OBJECT ==========
+# Create the application object first
+application = Application.builder().token(BOT_TOKEN).build()
 
 
 # ========== USER COMMANDS & HANDLERS ==========
-# All handler functions are defined here. They are correct.
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -350,9 +331,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
 
-
-# ========== REGISTER ALL HANDLERS ==========
-# Define handler objects first
+# --- Add all handlers to the application object ---
+# User Conversation Handlers
 register_conv_handler = ConversationHandler(
     entry_points=[CommandHandler("register", register_start)],
     states={
@@ -364,6 +344,7 @@ register_conv_handler = ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 )
+# Admin Panel Conversation Handlers
 admin_conv_handler = ConversationHandler(
     entry_points=[
         MessageHandler(filters.Regex('^➕ Add Tournament$'), add_tournament_start),
@@ -379,6 +360,7 @@ admin_conv_handler = ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 )
+# Send Room Details Conversation Handler
 send_room_handler = ConversationHandler(
     entry_points=[CommandHandler("sendroom", send_room_start)],
     states={
@@ -390,36 +372,41 @@ send_room_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel)],
 )
 
-# Add all handlers to the application object
-ptb_builder.add_handler(CommandHandler("start", start))
-ptb_builder.add_handler(CommandHandler("help", help_command))
-ptb_builder.add_handler(CommandHandler("myinfo", my_info))
-ptb_builder.add_handler(CommandHandler("admin", admin_panel))
-ptb_builder.add_handler(MessageHandler(filters.Regex('^📋 View Tournaments$'), view_tournaments))
-ptb_builder.add_handler(register_conv_handler)
-ptb_builder.add_handler(admin_conv_handler)
-ptb_builder.add_handler(send_room_handler)
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("help", help_command))
+application.add_handler(CommandHandler("myinfo", my_info))
+application.add_handler(CommandHandler("admin", admin_panel))
+application.add_handler(MessageHandler(filters.Regex('^📋 View Tournaments$'), view_tournaments))
+application.add_handler(register_conv_handler)
+application.add_handler(admin_conv_handler)
+application.add_handler(send_room_handler)
 
 
 # ========== WEB SERVER SETUP ==========
 
-@asynccontextmanager
-async def lifespan(_: Flask):
-    """The lifespan context manager. Runs startup and shutdown tasks for the bot."""
-    application = ptb_builder.build()
-    await application.initialize()
-    await application.start()
-    yield
-    await application.stop()
-    await application.shutdown()
+app = Flask(__name__)
 
-app.wsgi_app = Application.builder().token(BOT_TOKEN).build().asgi_app
+@app.before_first_request
+async def startup():
+    """Run startup tasks."""
+    db.setup_database()
+    conn = db.get_db_connection()
+    conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (ADMIN_ID,))
+    conn.execute("UPDATE users SET is_admin = 1 WHERE telegram_id = ?", (ADMIN_ID,))
+    conn.commit()
+    conn.close()
+    await application.initialize()
+
 
 @app.route("/")
 def index():
     return "Hello, I am your Free Fire Bot and I am running!"
 
+
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 async def webhook():
-    """This route is a dummy. PTB's asgi_app handles the webhook."""
+    """Webhook endpoint to process updates."""
+    await application.process_update(
+        Update.de_json(request.get_json(force=True), application.bot)
+    )
     return "ok"
