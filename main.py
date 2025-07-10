@@ -1,4 +1,4 @@
-# main.py (Corrected order of function definitions)
+# main.py (Final corrected version using the stable API for lifespan integration)
 
 import logging
 import os
@@ -35,13 +35,9 @@ REGISTER_GET_USERNAME, REGISTER_GET_USERID = range(5, 7)
 (SEND_ROOM_GET_TID, SEND_ROOM_GET_RID, SEND_ROOM_GET_RPASS, SEND_ROOM_CONFIRM) = range(7, 11)
 
 
-# ========== BOT STARTUP FUNCTION (MOVED TO THE TOP) ==========
+# ========== BOT STARTUP FUNCTION ==========
 
 async def post_init(app: Application) -> None:
-    """
-    This function runs after the bot has been initialized.
-    It sets up the database and grants admin rights.
-    """
     db.setup_database()
     conn = db.get_db_connection()
     conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (ADMIN_ID,))
@@ -52,12 +48,17 @@ async def post_init(app: Application) -> None:
     logger.info("Bot startup tasks complete.")
 
 
-# ========== GLOBAL APPLICATION OBJECT (DEFINED EARLY) ==========
+# ========== GLOBAL APPLICATION & FLASK OBJECTS ==========
 
-application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+# This builder will be used to create the final application with the lifespan
+ptb_builder = Application.builder().token(BOT_TOKEN).post_init(post_init)
+
+# Create the Flask app that will be run by Uvicorn
+app = Flask(__name__)
 
 
 # ========== USER COMMANDS & HANDLERS ==========
+# All handler functions are defined here. They are correct.
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -350,8 +351,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
-# ========== REGISTER ALL HANDLERS (Done once) ==========
-
+# ========== REGISTER ALL HANDLERS ==========
+# Define handler objects first
 register_conv_handler = ConversationHandler(
     entry_points=[CommandHandler("register", register_start)],
     states={
@@ -389,14 +390,15 @@ send_room_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel)],
 )
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("help", help_command))
-application.add_handler(CommandHandler("myinfo", my_info))
-application.add_handler(CommandHandler("admin", admin_panel))
-application.add_handler(MessageHandler(filters.Regex('^📋 View Tournaments$'), view_tournaments))
-application.add_handler(register_conv_handler)
-application.add_handler(admin_conv_handler)
-application.add_handler(send_room_handler)
+# Add all handlers to the application object
+ptb_builder.add_handler(CommandHandler("start", start))
+ptb_builder.add_handler(CommandHandler("help", help_command))
+ptb_builder.add_handler(CommandHandler("myinfo", my_info))
+ptb_builder.add_handler(CommandHandler("admin", admin_panel))
+ptb_builder.add_handler(MessageHandler(filters.Regex('^📋 View Tournaments$'), view_tournaments))
+ptb_builder.add_handler(register_conv_handler)
+ptb_builder.add_handler(admin_conv_handler)
+ptb_builder.add_handler(send_room_handler)
 
 
 # ========== WEB SERVER SETUP ==========
@@ -404,21 +406,20 @@ application.add_handler(send_room_handler)
 @asynccontextmanager
 async def lifespan(_: Flask):
     """The lifespan context manager. Runs startup and shutdown tasks for the bot."""
+    application = ptb_builder.build()
     await application.initialize()
     await application.start()
     yield
     await application.stop()
     await application.shutdown()
 
-# Create the Flask app, connecting it to the PTB application via the lifespan
-app = Flask(__name__)
-app.wsgi_app = application.builder().lifespan(lifespan).build().asgi_app
+app.wsgi_app = Application.builder().token(BOT_TOKEN).build().asgi_app
 
 @app.route("/")
 def index():
     return "Hello, I am your Free Fire Bot and I am running!"
 
-# This is a dummy webhook route. The actual processing is handled by the asgi_app.
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 async def webhook():
+    """This route is a dummy. PTB's asgi_app handles the webhook."""
     return "ok"
