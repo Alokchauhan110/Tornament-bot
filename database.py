@@ -1,4 +1,4 @@
-# database.py
+# database.py (Corrected Version)
 import sqlite3
 
 DB_FILE = "tournament.db"
@@ -13,7 +13,7 @@ def setup_database():
     """Creates the necessary tables if they don't exist."""
     conn = get_db_connection()
     c = conn.cursor()
-    # Users table: stores user info and admin status
+    # Users table
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY,
@@ -26,18 +26,18 @@ def setup_database():
     c.execute('''
         CREATE TABLE IF NOT EXISTS tournaments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mode TEXT NOT NULL,          -- 'BR' or 'CS'
+            mode TEXT NOT NULL,
             date_time TEXT NOT NULL,
             fee INTEGER NOT NULL,
             max_players INTEGER NOT NULL,
-            status TEXT DEFAULT 'OPEN', -- 'OPEN', 'FULL', 'IN_PROGRESS', 'FINISHED'
+            status TEXT DEFAULT 'OPEN',
             room_id TEXT,
             room_password TEXT
         )
     ''')
     # Registrations table: links users to tournaments
     c.execute('''
-        CREATE TABLE IF NOT in EXISTS registrations (
+        CREATE TABLE IF NOT EXISTS registrations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tournament_id INTEGER,
             telegram_id INTEGER,
@@ -53,7 +53,6 @@ def setup_database():
 def add_or_update_user(telegram_id, ff_username=None, ff_userid=None):
     conn = get_db_connection()
     c = conn.cursor()
-    # Check if user exists
     c.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
     user = c.fetchone()
     if user:
@@ -115,7 +114,6 @@ def get_tournament_details(tournament_id):
 def register_user_for_tournament(tournament_id, telegram_id):
     conn = get_db_connection()
     c = conn.cursor()
-    # Check if already registered
     c.execute("SELECT * FROM registrations WHERE tournament_id = ? AND telegram_id = ?", (tournament_id, telegram_id))
     if c.fetchone():
         conn.close()
@@ -124,7 +122,6 @@ def register_user_for_tournament(tournament_id, telegram_id):
     c.execute("INSERT INTO registrations (tournament_id, telegram_id) VALUES (?, ?)", (tournament_id, telegram_id))
     conn.commit()
     
-    # Check if tournament is now full
     c.execute("SELECT COUNT(*) as count FROM registrations WHERE tournament_id = ?", (tournament_id,))
     registration_count = c.fetchone()['count']
     tournament = get_tournament_details(tournament_id)
