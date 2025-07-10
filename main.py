@@ -1,4 +1,4 @@
-# main.py (Final corrected version with proper variable scope)
+# main.py (Corrected order of function definitions)
 
 import logging
 import os
@@ -35,8 +35,29 @@ REGISTER_GET_USERNAME, REGISTER_GET_USERID = range(5, 7)
 (SEND_ROOM_GET_TID, SEND_ROOM_GET_RID, SEND_ROOM_GET_RPASS, SEND_ROOM_CONFIRM) = range(7, 11)
 
 
+# ========== BOT STARTUP FUNCTION (MOVED TO THE TOP) ==========
+
+async def post_init(app: Application) -> None:
+    """
+    This function runs after the bot has been initialized.
+    It sets up the database and grants admin rights.
+    """
+    db.setup_database()
+    conn = db.get_db_connection()
+    conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (ADMIN_ID,))
+    conn.execute("UPDATE users SET is_admin = 1 WHERE telegram_id = ?", (ADMIN_ID,))
+    conn.commit()
+    conn.close()
+    logger.info(f"Admin rights granted to user ID: {ADMIN_ID}")
+    logger.info("Bot startup tasks complete.")
+
+
+# ========== GLOBAL APPLICATION OBJECT (DEFINED EARLY) ==========
+
+application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+
+
 # ========== USER COMMANDS & HANDLERS ==========
-# (All handler functions go here)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -329,12 +350,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
-# ========== WEB SERVER & BOT SETUP ==========
+# ========== REGISTER ALL HANDLERS (Done once) ==========
 
-# Define the global application object first
-application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-
-# Define all handler objects
 register_conv_handler = ConversationHandler(
     entry_points=[CommandHandler("register", register_start)],
     states={
@@ -346,7 +363,6 @@ register_conv_handler = ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 )
-
 admin_conv_handler = ConversationHandler(
     entry_points=[
         MessageHandler(filters.Regex('^➕ Add Tournament$'), add_tournament_start),
@@ -362,7 +378,6 @@ admin_conv_handler = ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 )
-
 send_room_handler = ConversationHandler(
     entry_points=[CommandHandler("sendroom", send_room_start)],
     states={
@@ -374,7 +389,6 @@ send_room_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel)],
 )
 
-# Add all handlers to the application object
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("help", help_command))
 application.add_handler(CommandHandler("myinfo", my_info))
@@ -385,11 +399,11 @@ application.add_handler(admin_conv_handler)
 application.add_handler(send_room_handler)
 
 
+# ========== WEB SERVER SETUP ==========
+
 @asynccontextmanager
 async def lifespan(_: Flask):
-    """
-    The lifespan context manager. It runs startup and shutdown tasks.
-    """
+    """The lifespan context manager. Runs startup and shutdown tasks for the bot."""
     await application.initialize()
     await application.start()
     yield
